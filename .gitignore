@@ -1,0 +1,13 @@
+node_modules/
+.next/
+.next-production/
+.next-test/
+dist/
+.env
+.env.*
+!.env.example
+data/
+playwright-report/
+test-results/
+*.log
+*.tsbuildinfo

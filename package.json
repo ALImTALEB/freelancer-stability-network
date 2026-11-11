@@ -1,0 +1,26 @@
+{
+  "name": "freelancer-stability-network",
+  "private": true,
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "build": "npm --prefix server run build && npm --prefix client run build",
+    "typecheck": "npm --prefix server run typecheck && npm --prefix client run typecheck",
+    "test": "npm --prefix server test",
+    "test:e2e": "playwright test",
+    "check": "npm run typecheck && npm test && npm run build",
+    "start": "concurrently -k \"npm --prefix server start\" \"npm --prefix client start\"",
+    "postinstall": "npm --prefix server ci && npm --prefix client ci",
+    "format": "prettier --write client/app client/next.config.ts server/src server/test tests playwright.config.ts package.json",
+    "audit": "npm audit --audit-level=high && npm --prefix server audit --audit-level=high && npm --prefix client audit --audit-level=high"
+  },
+  "devDependencies": {
+    "@playwright/test": "latest",
+    "@types/node": "latest",
+    "concurrently": "latest",
+    "prettier": "3.9.10",
+    "typescript": "latest"
+  }
+}
