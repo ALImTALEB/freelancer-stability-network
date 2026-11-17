@@ -257,6 +257,119 @@ test("Week 1 auth, validation, profile privacy, ownership and marketplace lifecy
     .expect(200);
   assert.equal(listing.body.total, 1);
   assert.equal(listing.body.jobs[0].budget, 1500);
+  assert.equal(listing.body.jobs[0].match, undefined);
+  const matchPath = "/api/jobs/" + id + "/matches";
+  await request(app).get(matchPath).expect(401);
+  await request(app).get("/api/jobs?sort=match").expect(401);
+  await client.get("/api/jobs?sort=match").expect(403);
+  await other.get(matchPath).expect(404);
+  const selfMatch = await freelancer.get(matchPath).expect(200);
+  assert.deepEqual(selfMatch.body.match, {
+    score: 100,
+    matchedSkills: ["React", "Node.js"],
+    missingSkills: [],
+  });
+  const candidates = await client.get(matchPath).expect(200);
+  assert.deepEqual(candidates.body.matches, [
+    { id: dev.body.id, name: dev.body.name, ...selfMatch.body.match },
+  ]);
+  await request(app).get("/api/conversations").expect(401);
+  await request(app)
+    .post("/api/messages")
+    .set("Origin", origin)
+    .send({ recipientId: alice.body.id, content: "Unauthorized" })
+    .expect(401);
+  await freelancer
+    .post("/api/messages")
+    .set("Origin", origin)
+    .send({ recipientId: dev.body.id, content: "Self message" })
+    .expect(404);
+  await freelancer
+    .post("/api/messages")
+    .set("Origin", origin)
+    .send({ recipientId: alice.body.id, content: " " })
+    .expect(400);
+  await freelancer
+    .post("/api/messages")
+    .set("Origin", origin)
+    .send({ recipientId: alice.body.id, content: "x".repeat(4001) })
+    .expect(400);
+  const sent = await freelancer
+    .post("/api/messages")
+    .set("Origin", origin)
+    .send({ recipientId: alice.body.id, content: "Interested in the project" })
+    .expect(201);
+  const conversationId = sent.body.message.conversationId;
+  const conversationPath = "/api/conversations/" + conversationId;
+  assert.equal(sent.body.message.senderId, dev.body.id);
+  const inbox = await client.get("/api/conversations").expect(200);
+  assert.equal(inbox.body.conversations[0].peerId, dev.body.id);
+  assert.match(inbox.headers["cache-control"], /no-store/);
+  assert.equal(
+    (await other.get("/api/conversations").expect(200)).body.conversations
+      .length,
+    0,
+  );
+  await other.get(conversationPath).expect(404);
+  await request(app).get(conversationPath).expect(401);
+  await other
+    .post("/api/messages")
+    .set("Origin", origin)
+    .send({ conversationId, content: "Intrusion" })
+    .expect(404);
+  await client
+    .post("/api/messages")
+    .set("Origin", origin)
+    .send({ conversationId, content: "Forged", senderId: dev.body.id })
+    .expect(400);
+  const reply = await client
+    .post("/api/messages")
+    .set("Origin", origin)
+    .send({ recipientId: dev.body.id, content: "Thanks for reaching out" })
+    .expect(201);
+  assert.equal(reply.body.message.conversationId, conversationId);
+  assert.equal(
+    (await client.get("/api/conversations")).body.conversations.length,
+    1,
+  );
+  const history = await freelancer.get(conversationPath).expect(200);
+  assert.deepEqual(
+    history.body.messages.map(
+      (message: { content: string }) => message.content,
+    ),
+    ["Interested in the project", "Thanks for reaching out"],
+  );
+  assert.equal(history.body.conversation.peerId, alice.body.id);
+  await freelancer.get(conversationPath + "?before=garbage").expect(400);
+  await db.query(
+    "INSERT INTO messages(conversation_id,sender_id,content) SELECT $1,$2,'Pagination fixture' FROM generate_series(1,50)",
+    [conversationId, dev.body.id],
+  );
+  const latest = await client.get(conversationPath).expect(200);
+  assert.equal(latest.body.messages.length, 50);
+  const older = await client
+    .get(conversationPath + "?before=" + latest.body.nextBefore)
+    .expect(200);
+  assert.deepEqual(older.body.messages, history.body.messages);
+  assert.equal(older.body.nextBefore, null);
+  const lowerMatch = await client
+    .post("/api/jobs")
+    .set("Origin", origin)
+    .send({ ...job, requiredSkills: ["React", "CSS", "MongoDB"] })
+    .expect(201);
+  const ranked = await freelancer
+    .get("/api/jobs?sort=match&skill=react")
+    .expect(200);
+  assert.deepEqual(
+    ranked.body.jobs.map(
+      (item: { match: { score: number } }) => item.match.score,
+    ),
+    [100, 33],
+  );
+  await client
+    .delete("/api/jobs/" + lowerMatch.body.id)
+    .set("Origin", origin)
+    .expect(204);
   const empty = await request(app).get("/api/jobs?skill=Python").expect(200);
   assert.equal(empty.body.total, 0);
   await request(app).get("/api/jobs?minBudget=oops").expect(400);
@@ -280,6 +393,11 @@ test("Week 1 auth, validation, profile privacy, ownership and marketplace lifecy
     .expect(200);
   assert.equal((await request(app).get("/api/jobs")).body.total, 0);
   await freelancer.get("/api/jobs/" + id).expect(403);
+  await freelancer.get(matchPath).expect(404);
+  assert.equal(
+    (await freelancer.get("/api/jobs?sort=match").expect(200)).body.total,
+    0,
+  );
   await client.get("/api/jobs/" + id).expect(200);
   assert.equal((await client.get("/api/jobs?mine=true")).body.total, 1);
   const stored = await db.query<{ password_hash: string }>(
@@ -330,7 +448,7 @@ test("auth attempts are rate limited", async () => {
     .send({})
     .expect(429);
 });
-test("accounts and jobs survive closing and reopening the database", async () => {
+test("accounts, jobs, and messages survive closing and reopening the database", async () => {
   await mkdir(join(process.cwd(), "data"), { recursive: true });
   const dir = await mkdtemp(join(process.cwd(), "data", "test-"));
   let persistent = await openDatabase(join(dir, "postgres"));
@@ -351,6 +469,21 @@ test("accounts and jobs survive closing and reopening the database", async () =>
       .set("Origin", origin)
       .send(job)
       .expect(201);
+    const peer = await request(createApp(persistent))
+      .post("/api/auth/register")
+      .set("Origin", origin)
+      .send({
+        name: "Persistent Freelancer",
+        email: "peer@example.com",
+        password: "long-password-123",
+        role: "freelancer",
+      })
+      .expect(201);
+    const sent = await first
+      .post("/api/messages")
+      .set("Origin", origin)
+      .send({ recipientId: peer.body.id, content: "Keep this conversation" })
+      .expect(201);
     await persistent.close();
     persistent = await openDatabase(join(dir, "postgres"));
     const second = request.agent(createApp(persistent));
@@ -361,6 +494,10 @@ test("accounts and jobs survive closing and reopening the database", async () =>
       .expect(200);
     const listing = await second.get("/api/jobs?mine=true").expect(200);
     assert.equal(listing.body.jobs[0].id, created.body.id);
+    const thread = await second
+      .get("/api/conversations/" + sent.body.message.conversationId)
+      .expect(200);
+    assert.equal(thread.body.messages[0].content, "Keep this conversation");
   } finally {
     if (!persistent.closed) await persistent.close();
     assert.ok(dir.startsWith(join(process.cwd(), "data", "test-")));

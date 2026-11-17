@@ -2,6 +2,7 @@ import { test, expect } from "@playwright/test";
 test("client publishes and manages a job; freelancer discovers it and saves skills", async ({
   page,
 }) => {
+  test.setTimeout(60_000);
   const suffix = Date.now();
   const title = `React dashboard ${suffix}`;
   await page.goto("/");
@@ -64,12 +65,29 @@ test("client publishes and manages a job; freelancer discovers it and saves skil
     .click();
   await page.getByLabel("Search jobs").fill(title);
   await page.getByLabel("Filter by skill").fill("React");
+  await page.getByLabel("Sort jobs").selectOption("match");
+  await expect(
+    page.getByText("100% skill match", { exact: true }),
+  ).toBeVisible();
   await expect(
     page.getByRole("button", { name: title, exact: true }),
   ).toBeVisible();
   await page.getByRole("button", { name: title, exact: true }).click();
   await expect(page.getByRole("dialog")).toContainText("E2E Studio");
-  await page.getByRole("button", { name: "Close dialog" }).click();
+  await expect(page.getByRole("dialog")).toContainText(
+    "Matched skills: React, TypeScript",
+  );
+  await page.getByRole("button", { name: "Message client" }).click();
+  await page
+    .getByLabel("Message", { exact: true })
+    .fill("Hi, I can help with the React work.");
+  await page.getByRole("button", { name: "Send message" }).click();
+  await expect(
+    page.getByRole("region", { name: "Conversation", exact: true }),
+  ).toContainText("Hi, I can help with the React work.");
+  await page
+    .getByRole("button", { name: "Discover jobs", exact: true })
+    .click();
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(
     page.getByRole("button", { name: "Log out on mobile" }),
@@ -93,6 +111,76 @@ test("client publishes and manages a job; freelancer discovers it and saves skil
     .getByRole("dialog")
     .getByRole("button", { name: "Log in", exact: true })
     .click();
+  await page
+    .getByRole("button", { name: "My job postings", exact: true })
+    .click();
+  await page.getByRole("button", { name: title, exact: true }).click();
+  await expect(page.getByRole("dialog")).toContainText("E2E Freelancer · 100%");
+  await page.getByRole("button", { name: "Message E2E Freelancer" }).click();
+  await expect(
+    page.getByRole("region", { name: "Conversation", exact: true }),
+  ).toContainText("Hi, I can help with the React work.");
+  await page
+    .getByLabel("Message", { exact: true })
+    .fill("Thanks, let’s discuss the project.");
+  await page.getByRole("button", { name: "Send message" }).click();
+  await expect(
+    page.getByRole("region", { name: "Conversation", exact: true }),
+  ).toContainText("Thanks, let’s discuss the project.");
+  await page.reload();
+  await page.getByRole("button", { name: "Inbox", exact: true }).click();
+  await page.getByRole("button", { name: /E2E Freelancer/ }).click();
+  await expect(
+    page.getByRole("region", { name: "Conversation", exact: true }),
+  ).toContainText("Thanks, let’s discuss the project.");
+  // The API suite exercises payment authorization and actual signature verification.
+  // Stub the hosted provider here so CI never needs a Stripe account or test card.
+  let checkoutOpened = false;
+  await page.route("**/api/payments", async (route) => {
+    if (route.request().method() === "POST") {
+      const payload = route.request().postDataJSON();
+      expect(Object.keys(payload).sort()).toEqual(["freelancerId", "jobId"]);
+      checkoutOpened = true;
+      await route.fulfill({ json: { url: "/?payments=checkout-return" } });
+      return;
+    }
+    await route.fulfill({
+      json: {
+        enabled: true,
+        payments: checkoutOpened
+          ? [
+              {
+                id: "test-payment",
+                jobTitle: title,
+                peerName: "E2E Freelancer",
+                amountCents: 150000,
+                status: "paid",
+              },
+            ]
+          : [],
+      },
+    });
+  });
+  await page
+    .getByRole("button", { name: "My job postings", exact: true })
+    .click();
+  await page.getByRole("button", { name: title, exact: true }).click();
+  const payment = page.getByRole("region", {
+    name: "Job payment",
+    exact: true,
+  });
+  await payment
+    .getByLabel("Freelancer")
+    .selectOption({ label: "E2E Freelancer" });
+  await payment
+    .getByRole("button", { name: "Pay $1,500.00 in test mode" })
+    .click();
+  await expect(
+    page.getByRole("heading", { name: "Payments", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("E2E Freelancer · $1,500.00 · paid"),
+  ).toBeVisible();
   await page
     .getByRole("button", { name: "My job postings", exact: true })
     .click();

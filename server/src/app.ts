@@ -10,6 +10,13 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { z } from "zod";
 import type { Database } from "./db.js";
 import { digest, hashPassword, verifyPassword } from "./security.js";
+import { calculateMatchScore } from "./matching.js";
+import { messagingRoutes } from "./messaging.js";
+import {
+  paymentRoutes,
+  stripeWebhook,
+  type PaymentConfig,
+} from "./payments.js";
 
 const skills = z
   .array(z.string().trim().min(1).max(50))
@@ -87,7 +94,12 @@ class HttpError extends Error {
 }
 export function createApp(
   db: Database,
-  options: { origin?: string; production?: boolean; rateLimit?: number } = {},
+  options: {
+    origin?: string;
+    production?: boolean;
+    rateLimit?: number;
+    payments?: PaymentConfig;
+  } = {},
 ) {
   const app = express();
   const origin = options.origin || "http://localhost:3100";
@@ -109,7 +121,13 @@ export function createApp(
     path: "/",
   };
   app.disable("x-powered-by");
-  app.use(helmet(), express.json({ limit: "64kb" }), cookieParser());
+  app.use(helmet());
+  app.post(
+    "/api/stripe/webhook",
+    express.raw({ type: "application/json", limit: "256kb" }),
+    stripeWebhook(db, options.payments),
+  );
+  app.use(express.json({ limit: "64kb" }), cookieParser());
   app.use(
     "/api",
     rateLimit({
@@ -165,6 +183,11 @@ export function createApp(
     );
     res.cookie("session", token, { ...cookie, maxAge: 7 * 24 * 3600 * 1000 });
   }
+  app.use("/api", messagingRoutes(db, auth));
+  app.use(
+    "/api",
+    paymentRoutes(db, auth, new URL(origin).origin, options.payments),
+  );
   app.get("/api/health", async (_req, res) => {
     await db.query("SELECT 1");
     res.json({ status: "ok" });
@@ -277,6 +300,7 @@ export function createApp(
         minBudget: z.coerce.number().min(0).optional(),
         maxBudget: z.coerce.number().min(0).optional(),
         mine: z.enum(["true"]).optional(),
+        sort: z.enum(["match"]).optional(),
         page: z.coerce.number().int().min(1).max(10000).default(1),
       })
       .parse(req.query);
@@ -304,6 +328,39 @@ export function createApp(
     if (q.minBudget !== undefined) add("j.budget>=?", q.minBudget);
     if (q.maxBudget !== undefined) add("j.budget<=?", q.maxBudget);
     const clause = where.length ? `WHERE ${where.join(" AND ")}` : "";
+    const offset = (q.page - 1) * 20;
+    if (q.sort === "match") {
+      if (q.mine)
+        throw new HttpError(
+          400,
+          "Match sorting is only available in job discovery",
+        );
+      await auth(req, res, () => {});
+      const user = res.locals.user as User;
+      if (user.role !== "freelancer")
+        throw new HttpError(
+          403,
+          "Only freelancers can see job recommendations",
+        );
+      res.set("Cache-Control", "private, no-store");
+      const result = await db.query<{ requiredSkills: string[] }>(
+        `SELECT ${jobFields} FROM jobs j JOIN users u ON u.id=j.client_id ${clause} ORDER BY j.created_at DESC, j.id`,
+        values,
+      );
+      const ranked = result.rows
+        .map((job) => ({
+          ...job,
+          match: calculateMatchScore(job.requiredSkills, user.skills),
+        }))
+        .sort((a, b) => b.match.score - a.match.score);
+      res.json({
+        jobs: ranked.slice(offset, offset + 20),
+        total: ranked.length,
+        page: q.page,
+        pageSize: 20,
+      });
+      return;
+    }
     const count = await db.query<{ total: number }>(
       `SELECT count(*)::int AS total FROM jobs j ${clause}`,
       values,
@@ -318,6 +375,45 @@ export function createApp(
       page: q.page,
       pageSize: 20,
     });
+  });
+  app.get("/api/jobs/:id/matches", auth, async (req, res) => {
+    const id = z.uuid().parse(req.params.id);
+    const user = res.locals.user as User;
+    const job = (
+      await db.query<{
+        client_id: string;
+        status: string;
+        required_skills: string[];
+      }>("SELECT client_id, status, required_skills FROM jobs WHERE id=$1", [
+        id,
+      ])
+    ).rows[0];
+    if (
+      !job ||
+      (user.role === "freelancer"
+        ? job.status !== "open"
+        : job.client_id !== user.id)
+    )
+      throw new HttpError(404, "Job not found");
+    res.set("Cache-Control", "private, no-store");
+    if (user.role === "freelancer") {
+      res.json({
+        match: calculateMatchScore(job.required_skills, user.skills),
+      });
+      return;
+    }
+    const candidates = await db.query<Pick<User, "id" | "name" | "skills">>(
+      "SELECT id, name, skills FROM users WHERE role='freelancer' ORDER BY name, id",
+    );
+    const matches = candidates.rows
+      .map(({ id, name, skills }) => ({
+        id,
+        name,
+        ...calculateMatchScore(job.required_skills, skills),
+      }))
+      .filter((match) => match.score > 0)
+      .sort((a, b) => b.score - a.score);
+    res.json({ matches: matches.slice(0, 20), total: matches.length });
   });
   app.get("/api/jobs/:id", async (req, res) => {
     z.uuid().parse(req.params.id);

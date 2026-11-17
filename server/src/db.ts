@@ -89,6 +89,42 @@ export async function openDatabase(path?: string) {
     );
     CREATE INDEX IF NOT EXISTS jobs_client_idx ON jobs(client_id);
     CREATE INDEX IF NOT EXISTS sessions_expiry_idx ON sessions(expires_at);
+    CREATE TABLE IF NOT EXISTS conversations (
+      id UUID PRIMARY KEY,
+      client_id UUID NOT NULL REFERENCES users(id),
+      freelancer_id UUID NOT NULL REFERENCES users(id),
+      UNIQUE (client_id, freelancer_id),
+      CHECK (client_id <> freelancer_id)
+    );
+    CREATE INDEX IF NOT EXISTS conversations_freelancer_idx ON conversations(freelancer_id);
+    CREATE TABLE IF NOT EXISTS messages (
+      id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+      conversation_id UUID NOT NULL REFERENCES conversations(id),
+      sender_id UUID NOT NULL REFERENCES users(id),
+      content TEXT NOT NULL CHECK (char_length(content) BETWEEN 1 AND 4000),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS messages_conversation_idx ON messages(conversation_id, id DESC);
+    CREATE TABLE IF NOT EXISTS stripe_accounts (
+      freelancer_id UUID PRIMARY KEY REFERENCES users(id),
+      account_id TEXT NOT NULL UNIQUE
+    );
+    CREATE TABLE IF NOT EXISTS payments (
+      id UUID PRIMARY KEY,
+      job_id UUID NOT NULL,
+      job_title TEXT NOT NULL,
+      client_id UUID NOT NULL REFERENCES users(id),
+      freelancer_id UUID NOT NULL REFERENCES users(id),
+      destination TEXT NOT NULL,
+      amount_cents INTEGER NOT NULL CHECK (amount_cents >= 50),
+      status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','paid','failed','expired')),
+      stripe_session_id TEXT UNIQUE,
+      stripe_payment_id TEXT UNIQUE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS payments_active_job_idx ON payments(job_id) WHERE status IN ('pending','paid');
+    CREATE INDEX IF NOT EXISTS payments_client_idx ON payments(client_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS payments_freelancer_idx ON payments(freelancer_id, created_at DESC);
   `);
     if (!initial) await save();
   } catch (error) {

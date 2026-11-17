@@ -1,6 +1,6 @@
 # Freelancer Stability Network
 
-Week 1 marketplace foundation. Next.js + TypeScript client, Express + TypeScript REST API, and persistent embedded PostgreSQL (PGlite).
+Week 1 marketplace foundation, Week 2 skill matching, Week 3 private messaging, and Week 4 Stripe Connect test payments. Next.js + TypeScript client, Express + TypeScript REST API, and persistent embedded PostgreSQL (PGlite).
 
 ## Quick start
 
@@ -14,7 +14,7 @@ npm run dev
 Open http://localhost:3100. API health: http://localhost:4100/api/health.
 Both processes run together; Ctrl+C stops them. No database install, Docker, API keys, or demo credentials are needed. Register a client to post a job, then log out and register a freelancer to browse it and edit skills.
 
-The development launcher waits for its own API process to finish database initialization and start listening before starting the frontend. A backend failure stops startup instead of leaving a disconnected page running. The frontend proxy and API origin are configured together. Backend source edits require restarting `npm run dev`; frontend edits still reload automatically. For alternate local ports, set `PORT` (API) and `WEB_PORT` (frontend) before running the root command.
+The development launcher waits for its own API process to finish database initialization and start listening before starting the frontend. A backend failure stops startup instead of leaving a disconnected page running. The frontend proxy and API origin are configured together. Changes under `server/src` restart the development API after it closes the database, while Next.js reloads frontend edits. If Inbox shows “Endpoint not found” after updating from an older version, stop the old terminal and rerun `npm.cmd run dev` from the project root. For alternate local ports, set `PORT` (API) and `WEB_PORT` (frontend) before running the root command.
 
 The root install script installs the client and server automatically using their own lockfiles. Production builds use `client/.next-production`; development uses `client/.next` so their output files stay separate.
 
@@ -76,4 +76,21 @@ CI checks types, integration tests, production build, browser tests, and depende
 - [Next.js installation](https://nextjs.org/docs/app/getting-started/installation)
 - [PGlite documentation](https://pglite.dev/docs/)
 
-See `docs/WEEK_1.md` before starting matching in Week 2.
+To try matching, save `React, Node.js, Python` on a freelancer profile and post a job requiring `React, Node.js, MongoDB` from a client account. In **Discover jobs**, select **Best skill match** and open the job to see **67%** with MongoDB listed as missing. On the client account, open the same job from **My job postings** to see matching freelancers. Scores are calculated from existing profile and job data, including records created in Week 1. The local MVP ranks the filtered job set in memory before returning a page.
+
+To try private messaging, open a posting as a freelancer and choose **Message client**. A client can also start a conversation from **Matching freelancers** on their posting. Sign in as the other participant, open **Inbox**, and reply. Use **Refresh inbox** or **Refresh messages** to fetch new activity. Each pair shares one conversation across jobs. Conversations persist independently of a posting, including after it is deleted. The API adds the messaging tables when it opens an existing database.
+
+## Stripe Connect test payments
+
+1. Enable Connect for your Stripe test environment and configure hosted onboarding for Express accounts. The platform and freelancer test accounts should use a supported domestic USD setup for this MVP. [Stripe Connect Express onboarding](https://docs.stripe.com/connect/express-accounts)
+2. Sign in to the Stripe CLI with `stripe login`, select the same test environment as your API key, and keep this listener running in a separate terminal. This listens for platform Checkout events. [Stripe webhook development guide](https://docs.stripe.com/webhooks)
+
+   ```powershell
+   stripe listen --events checkout.session.completed,checkout.session.async_payment_succeeded,checkout.session.async_payment_failed,checkout.session.expired --forward-to http://127.0.0.1:4100/api/stripe/webhook
+   ```
+
+3. In `server/.env`, set `STRIPE_SECRET_KEY` to your environment's `sk_test_` key and `STRIPE_WEBHOOK_SECRET` to the `whsec_` secret printed by the listener. Restart `npm.cmd run dev`. The app accepts only a test secret key. When the credentials are absent, accounts, jobs, matching and messaging remain usable.
+4. As a freelancer, open **Payments → Connect with Stripe** and complete test onboarding. Return to **Payments** and verify the account is ready. As the client, start or reuse a conversation with that freelancer, open a job you own from **My job postings**, choose the freelancer, and start **Test payment**.
+5. In hosted Checkout, use Stripe's `4242 4242 4242 4242` test card with a future expiry and any three-digit CVC. After returning, open **Payments** and refresh its status. Both participants should see **paid** once the webhook arrives. Try a declined test card to verify Stripe lets the client retry the same session. [Stripe test cards](https://docs.stripe.com/testing)
+
+Checkout charges the saved USD job budget and routes the funds to the freelancer's connected account using a Stripe destination charge. Each job has at most one pending or paid attempt. A pending Checkout session can be reopened from the job, and a verified expiration or failure allows another attempt. If a session never gets recorded and Stripe's response was ambiguous, the reservation is retained after its retry window to avoid a duplicate charge. Inspect the corresponding Checkout event or session in Stripe before deciding how to resolve it. Payment history remains available after a job is deleted. [Stripe destination charges](https://docs.stripe.com/connect/destination-charges)

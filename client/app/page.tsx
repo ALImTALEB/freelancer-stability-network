@@ -1,5 +1,7 @@
 "use client";
 import { useEffect, useState, useRef, type FormEvent } from "react";
+import { Inbox, type Recipient } from "./inbox";
+import { JobCheckout, Payments } from "./payments";
 import {
   ArrowUpRight,
   BriefcaseBusiness,
@@ -14,6 +16,8 @@ import {
   X,
   Pencil,
   Trash2,
+  Mail,
+  CreditCard,
 } from "lucide-react";
 type User = {
   id: string;
@@ -25,6 +29,11 @@ type User = {
   experience: string;
   portfolio: string;
   organization: string;
+};
+type SkillMatch = {
+  score: number;
+  matchedSkills: string[];
+  missingSkills: string[];
 };
 type Job = {
   id: string;
@@ -38,6 +47,7 @@ type Job = {
   clientName: string;
   organization: string;
   createdAt: string;
+  match?: SkillMatch;
 };
 async function api<T>(
   path: string,
@@ -74,31 +84,52 @@ export default function Home() {
     [loading, setLoading] = useState(true),
     [error, setError] = useState(""),
     [notice, setNotice] = useState("");
-  const [view, setView] = useState<"browse" | "mine" | "profile">("browse"),
+  const [view, setView] = useState<
+      "browse" | "mine" | "profile" | "inbox" | "payments"
+    >("browse"),
+    [recipient, setRecipient] = useState<Recipient | null>(null),
+    [paymentReturn, setPaymentReturn] = useState<string | null>(null),
     [modal, setModal] = useState<"login" | "register" | "job" | null>(null),
     [editing, setEditing] = useState<Job | null>(null),
     [selected, setSelected] = useState<Job | null>(null),
     [busy, setBusy] = useState(false);
   const [search, setSearch] = useState(""),
+    [jobSort, setJobSort] = useState("newest"),
     [skill, setSkill] = useState(""),
     [category, setCategory] = useState(""),
     [min, setMin] = useState(""),
     [max, setMax] = useState(""),
     [page, setPage] = useState(1),
     [revision, setRevision] = useState(0);
+  const matchUserId =
+    view === "browse" && user?.role === "freelancer" && jobSort === "match"
+      ? user.id
+      : undefined;
   useEffect(() => {
     api<User>("/auth/me")
       .then(setUser)
       .catch(() => {})
       .finally(() => setReady(true));
   }, []);
+  const signedInId = user?.id;
   useEffect(() => {
-    if (view === "profile") return;
+    if (!signedInId) return;
+    const url = new URL(window.location.href);
+    const returned = url.searchParams.get("payments");
+    if (!returned) return;
+    setPaymentReturn(returned);
+    setView("payments");
+    url.searchParams.delete("payments");
+    window.history.replaceState(window.history.state, "", url);
+  }, [signedInId]);
+  useEffect(() => {
+    if (view === "profile" || view === "inbox" || view === "payments") return;
     let active = true;
     setLoading(true);
     setError("");
     const params = new URLSearchParams({ page: String(page) });
     if (view === "mine") params.set("mine", "true");
+    if (matchUserId) params.set("sort", "match");
     if (search) params.set("search", search);
     if (skill) params.set("skill", skill);
     if (category) params.set("category", category);
@@ -123,7 +154,7 @@ export default function Home() {
       active = false;
       clearTimeout(timer);
     };
-  }, [view, search, skill, category, min, max, page, revision]);
+  }, [view, search, skill, category, min, max, page, revision, matchUserId]);
   const dialogRef = useRef<HTMLElement>(null);
   const dialogOpen = !!modal || !!selected;
   useEffect(() => {
@@ -165,6 +196,8 @@ export default function Home() {
     };
   }, [dialogOpen, busy]);
   const changeView = (v: typeof view) => {
+    setPaymentReturn(null);
+    setRecipient(null);
     setView(v);
     setPage(1);
     setError("");
@@ -176,6 +209,11 @@ export default function Home() {
     setError("");
   };
   const refresh = () => setRevision((v) => v + 1);
+  function messageRecipient(recipient: Recipient) {
+    close();
+    changeView("inbox");
+    setRecipient(recipient);
+  }
   async function logout() {
     try {
       await api("/auth/logout", "POST");
@@ -320,6 +358,24 @@ export default function Home() {
               My profile
             </button>
           )}
+          {user && (
+            <button
+              className={view === "inbox" ? "active" : ""}
+              onClick={() => changeView("inbox")}
+            >
+              <Mail size={19} />
+              Inbox
+            </button>
+          )}
+          {user && (
+            <button
+              className={view === "payments" ? "active" : ""}
+              onClick={() => changeView("payments")}
+            >
+              <CreditCard size={19} />
+              Payments
+            </button>
+          )}
         </nav>
         <div className="sidebar-bottom">
           <div className="community">
@@ -363,7 +419,11 @@ export default function Home() {
               ? "My profile"
               : view === "mine"
                 ? "My job postings"
-                : "Discover jobs"}
+                : view === "inbox"
+                  ? "Inbox"
+                  : view === "payments"
+                    ? "Payments"
+                    : "Discover jobs"}
           </div>
           <div className="header-actions">
             <span className="live-dot" />
@@ -419,7 +479,21 @@ export default function Home() {
               {error}
             </div>
           )}
-          {view === "profile" && user ? (
+          {view === "payments" && user ? (
+            <Payments
+              key={user.id}
+              api={api}
+              freelancer={user.role === "freelancer"}
+              returned={paymentReturn}
+            />
+          ) : view === "inbox" && user ? (
+            <Inbox
+              key={user.id + (recipient?.id ?? "")}
+              api={api}
+              userId={user.id}
+              recipient={recipient}
+            />
+          ) : view === "profile" && user ? (
             <>
               <div className="section-heading">
                 <div>
@@ -583,8 +657,35 @@ export default function Home() {
                     : "Explore opportunities"}{" "}
                   <span>{total}</span>
                 </h2>
-                <span className="sort-label">Newest first ↓</span>
+                {view === "browse" && user?.role === "freelancer" ? (
+                  <select
+                    className="job-sort"
+                    aria-label="Sort jobs"
+                    value={jobSort}
+                    onChange={(event) => {
+                      setJobSort(event.target.value);
+                      setPage(1);
+                    }}
+                  >
+                    <option value="newest">Newest first</option>
+                    <option value="match">Best skill match</option>
+                  </select>
+                ) : (
+                  <span className="sort-label">Newest first ↓</span>
+                )}
               </div>
+              {matchUserId && user?.skills.length === 0 && (
+                <p>
+                  Add skills in{" "}
+                  <button
+                    className="text-button"
+                    onClick={() => changeView("profile")}
+                  >
+                    My profile
+                  </button>{" "}
+                  to see how well jobs match.
+                </p>
+              )}
               <div className="filters">
                 <div className="search-field">
                   <Search size={18} />
@@ -736,6 +837,11 @@ export default function Home() {
                         <ArrowUpRight size={19} />
                       </button>
                       <p className="job-description">{j.description}</p>
+                      {matchUserId && j.match && (
+                        <div className="skill-match">
+                          <strong>{j.match.score}% skill match</strong>
+                        </div>
+                      )}
                       <div className="tags">
                         {j.requiredSkills.slice(0, 5).map((s) => (
                           <span key={s}>{s}</span>
@@ -1021,11 +1127,37 @@ export default function Home() {
                     <span key={s}>{s}</span>
                   ))}
                 </div>
-                <p className="detail-note">
-                  This release supports discovery and job management.
-                  Applications and communication will be added in later
-                  milestones.
-                </p>
+                {user?.role === "freelancer" && (
+                  <button
+                    className="dark-button message-action"
+                    onClick={() =>
+                      messageRecipient({
+                        id: selected.clientId,
+                        name: selected.clientName,
+                      })
+                    }
+                  >
+                    Message client <Mail size={16} />
+                  </button>
+                )}
+                {user &&
+                  (user.role === "freelancer" ||
+                    user.id === selected.clientId) && (
+                    <JobMatches
+                      key={selected.id + user.id}
+                      jobId={selected.id}
+                      role={user.role}
+                      onMessage={messageRecipient}
+                    />
+                  )}
+                {user?.id === selected.clientId && (
+                  <JobCheckout
+                    key={selected.id}
+                    api={api}
+                    jobId={selected.id}
+                    budget={selected.budget}
+                  />
+                )}
                 {user?.id === selected.clientId && (
                   <button
                     className="dark-button"
@@ -1042,6 +1174,83 @@ export default function Home() {
             ) : null}
           </section>
         </div>
+      )}
+    </div>
+  );
+}
+type CandidateMatch = SkillMatch & { id: string; name: string };
+function JobMatches({
+  jobId,
+  role,
+  onMessage,
+}: {
+  jobId: string;
+  role: User["role"];
+  onMessage: (recipient: Recipient) => void;
+}) {
+  const [result, setResult] = useState<{
+    match?: SkillMatch;
+    matches?: CandidateMatch[];
+    total?: number;
+  }>();
+  const [error, setError] = useState("");
+  useEffect(() => {
+    let active = true;
+    api<NonNullable<typeof result>>(`/jobs/${jobId}/matches`)
+      .then((data) => {
+        if (active) setResult(data);
+      })
+      .catch((error: Error) => {
+        if (active) setError(error.message);
+      });
+    return () => {
+      active = false;
+    };
+  }, [jobId]);
+  if (error) return <p role="alert">{error}</p>;
+  if (!result) return <p role="status">Checking skill matches…</p>;
+  if (result.match) {
+    return (
+      <div className="skill-match">
+        <strong>{result.match.score}% skill match</strong>
+        <p>
+          Matched skills: {result.match.matchedSkills.join(", ") || "None yet"}
+        </p>
+        <p>Skills to add: {result.match.missingSkills.join(", ") || "None"}</p>
+      </div>
+    );
+  }
+  if (role !== "client") return null;
+  const matches = result.matches ?? [];
+  return (
+    <div className="skill-match">
+      <h3>Matching freelancers</h3>
+      {!matches.length ? (
+        <p>No freelancers have matching skills yet.</p>
+      ) : (
+        <>
+          {(result.total ?? 0) > matches.length && (
+            <p>
+              Showing the top {matches.length} of {result.total} matches.
+            </p>
+          )}
+          <ul>
+            {matches.map((match) => (
+              <li key={match.id}>
+                <strong>
+                  {match.name} · {match.score}%
+                </strong>{" "}
+                · {match.matchedSkills.join(", ")}
+                <button
+                  className="text-button"
+                  onClick={() => onMessage({ id: match.id, name: match.name })}
+                >
+                  Message {match.name}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </>
       )}
     </div>
   );

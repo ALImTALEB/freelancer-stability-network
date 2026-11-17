@@ -3,12 +3,14 @@ import { mkdirSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { openDatabase } from "./db.js";
 import { createApp } from "./app.js";
+import { paymentConfigFromEnv } from "./payments.js";
 const path = resolve(process.env.DATABASE_PATH || "./data/snapshots");
 mkdirSync(dirname(path), { recursive: true });
 const db = await openDatabase(path);
 const server = createApp(db, {
   origin: process.env.APP_ORIGIN,
   production: process.env.NODE_ENV === "production",
+  payments: paymentConfigFromEnv(process.env),
 }).listen(Number(process.env.PORT || 4100), "127.0.0.1", () => {
   console.log(
     "API ready at http://localhost:" +

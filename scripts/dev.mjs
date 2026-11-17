@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, watch } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
 
@@ -14,11 +14,19 @@ const children = new Set();
 let stopping = false;
 let web;
 let timer;
+let restartTimer;
+let watcher;
+let api;
+let restarting = false;
+let apiReady = false;
+let sourceChanged = false;
 
 function stop(code) {
   if (stopping) return;
   stopping = true;
   clearTimeout(timer);
+  clearTimeout(restartTimer);
+  watcher?.close();
   for (const child of children) {
     if (child.connected) child.send({ type: "shutdown" });
     else child.kill("SIGTERM");
@@ -45,11 +53,17 @@ function launch(args, cwd, env, ipc = false) {
   });
   children.add(child);
   child.on("error", (error) => {
+    children.delete(child);
     console.error(`Startup failed: ${error.message}`);
     stop(1);
   });
   child.on("exit", (code) => {
     children.delete(child);
+    if (!stopping && child === api && restarting && code === 0) {
+      restarting = false;
+      startApi();
+      return;
+    }
     if (!stopping) {
       console.error(
         `A service stopped (exit ${code}). Fix the error above, then run npm run dev again.`,
@@ -59,34 +73,72 @@ function launch(args, cwd, env, ipc = false) {
   });
   return child;
 }
-console.log(
-  `Starting API on ${apiPort}; waiting for database and HTTP readiness…`,
-);
-const api = launch(
-  ["--import", "tsx", "src/index.ts"],
-  serverDir,
-  { PORT: apiPort, APP_ORIGIN: appOrigin },
-  true,
-);
-timer = setTimeout(() => {
-  console.error(
-    "API startup timed out. The frontend was not started. Check the database/API error above.",
-  );
-  stop(1);
-}, 60000);
-api.on("message", (message) => {
-  if (message?.type !== "ready" || web || stopping) return;
+function startApi() {
   clearTimeout(timer);
-  console.log(`API ready. Starting the app at ${appOrigin}`);
-  web = launch(
-    [
-      resolve(root, "client/node_modules/next/dist/bin/next"),
-      "dev",
-      "--port",
-      webPort,
-    ],
-    resolve(root, "client"),
-    { API_URL: `http://127.0.0.1:${apiPort}` },
+  apiReady = false;
+  sourceChanged = false;
+  console.log(
+    `Starting API on ${apiPort}; waiting for database and HTTP readiness…`,
   );
+  const child = launch(
+    ["--import", "tsx", "src/index.ts"],
+    serverDir,
+    { PORT: apiPort, APP_ORIGIN: appOrigin },
+    true,
+  );
+  api = child;
+  timer = setTimeout(() => {
+    console.error("API startup timed out. Check the database/API error above.");
+    stop(1);
+  }, 60000);
+  child.on("message", (message) => {
+    if (message?.type !== "ready" || stopping) return;
+    clearTimeout(timer);
+    apiReady = true;
+    if (sourceChanged) {
+      scheduleRestart();
+      return;
+    }
+    if (web) return;
+    console.log(`API ready. Starting the app at ${appOrigin}`);
+    web = launch(
+      [
+        resolve(root, "client/node_modules/next/dist/bin/next"),
+        "dev",
+        "--port",
+        webPort,
+      ],
+      resolve(root, "client"),
+      { API_URL: `http://127.0.0.1:${apiPort}` },
+    );
+  });
+}
+startApi();
+function scheduleRestart() {
+  clearTimeout(restartTimer);
+  restartTimer = setTimeout(() => {
+    if (stopping || restarting || !apiReady || !api.connected) return;
+    restarting = true;
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      console.error("API shutdown timed out. Restart the development command.");
+      stop(1);
+    }, 15000);
+    console.log("Backend source changed. Restarting the API…");
+    api.send({ type: "shutdown" });
+  }, 300);
+}
+watcher = watch(
+  resolve(serverDir, "src"),
+  { recursive: true },
+  (_event, file) => {
+    if (file && !file.endsWith(".ts")) return;
+    sourceChanged = true;
+    scheduleRestart();
+  },
+);
+watcher.on("error", (error) => {
+  console.error(`Backend source watcher failed: ${error.message}`);
+  stop(1);
 });
 for (const signal of ["SIGINT", "SIGTERM"]) process.on(signal, () => stop(0));
