@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useState, useRef, type FormEvent } from "react";
 import { Inbox, type Recipient } from "./inbox";
+import { Reputation } from "./reviews";
 import { JobCheckout, Payments } from "./payments";
 import {
   ArrowUpRight,
@@ -511,6 +512,7 @@ export default function Home() {
                 key={user.id}
               >
                 <h2>Your {user.role} profile</h2>
+                <Reputation api={api} userId={user.id} />
                 <label>
                   Full name
                   <input
@@ -1119,6 +1121,7 @@ export default function Home() {
                 <div className="detail-budget">
                   {money(selected.budget)} <small>Fixed project budget</small>
                 </div>
+                {user && <Reputation api={api} userId={selected.clientId} />}
                 <h3>About the project</h3>
                 <p className="detail-description">{selected.description}</p>
                 <h3>Skills needed</h3>
@@ -1247,6 +1250,10 @@ function JobMatches({
                 >
                   Message {match.name}
                 </button>
+                <details>
+                  <summary>View reviews for {match.name}</summary>
+                  <Reputation api={api} userId={match.id} />
+                </details>
               </li>
             ))}
           </ul>

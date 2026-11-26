@@ -43,3 +43,7 @@ Errors: 400 validation, 401 authentication, 403 role/ownership/origin, 404 missi
 Messaging accepts plain text of 1–4,000 characters after trimming. The sender comes from the session. A conversation ID that does not belong to the signed-in user returns 404 for both reading and sending. Messaging responses use private, no-store caching.
 
 The server sets the payment amount from the job budget, in USD cents. It accepts `pending`, `paid`, `failed`, and `expired` as internal states. Webhook updates verify the session, currency and amount, and repeated notifications cannot change a terminal status. A browser return from Checkout does not change the payment state. Card entry is hosted by Stripe.
+
+## Week 5
+
+See [Week 5 API additions](WEEK_5.md) for completion and review endpoints, authorization and limits.

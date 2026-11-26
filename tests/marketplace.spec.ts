@@ -136,6 +136,21 @@ test("client publishes and manages a job; freelancer discovers it and saves skil
   // The API suite exercises payment authorization and actual signature verification.
   // Stub the hosted provider here so CI never needs a Stripe account or test card.
   let checkoutOpened = false;
+  let completed = false;
+  let reviewed = false;
+  await page.route("**/api/payments/test-payment/complete", async (route) => {
+    completed = true;
+    await route.fulfill({ json: { completed: true } });
+  });
+  await page.route("**/api/reviews", async (route) => {
+    expect(route.request().postDataJSON()).toEqual({
+      paymentId: "test-payment",
+      rating: 5,
+      comment: "Excellent collaboration.",
+    });
+    reviewed = true;
+    await route.fulfill({ status: 201, json: { id: "review-fixture" } });
+  });
   await page.route("**/api/payments", async (route) => {
     if (route.request().method() === "POST") {
       const payload = route.request().postDataJSON();
@@ -151,6 +166,8 @@ test("client publishes and manages a job; freelancer discovers it and saves skil
           ? [
               {
                 id: "test-payment",
+                completedAt: completed ? new Date().toISOString() : null,
+                reviewed,
                 jobTitle: title,
                 peerName: "E2E Freelancer",
                 amountCents: 150000,
@@ -180,6 +197,19 @@ test("client publishes and manages a job; freelancer discovers it and saves skil
   ).toBeVisible();
   await expect(
     page.getByText("E2E Freelancer · $1,500.00 · paid"),
+  ).toBeVisible();
+  await page
+    .getByRole("button", { name: "Mark work complete", exact: true })
+    .click();
+  await page.getByRole("combobox", { name: "Rating", exact: true }).selectOption("5");
+  await page
+    .getByRole("textbox", { name: "Review", exact: true })
+    .fill("Excellent collaboration.");
+  await page
+    .getByRole("button", { name: "Submit review", exact: true })
+    .click();
+  await expect(
+    page.getByText("Work completed · Your review has been submitted."),
   ).toBeVisible();
   await page
     .getByRole("button", { name: "My job postings", exact: true })

@@ -1,4 +1,4 @@
-import { Router, type RequestHandler } from "express";
+import { Router, type ErrorRequestHandler, type RequestHandler } from "express";
 import { randomUUID } from "node:crypto";
 import Stripe from "stripe";
 import { z } from "zod";
@@ -10,7 +10,10 @@ export function paymentConfigFromEnv(
 ): PaymentConfig | undefined {
   const key = env.STRIPE_SECRET_KEY;
   const webhookSecret = env.STRIPE_WEBHOOK_SECRET;
-  if (!key?.startsWith("sk_test_") || !webhookSecret?.startsWith("whsec_")) {
+  if (
+    !/^(sk|rk)_test_/.test(key ?? "") ||
+    !webhookSecret?.startsWith("whsec_")
+  ) {
     if (key || webhookSecret)
       console.warn(
         "Stripe payments disabled: configure a test secret key and webhook signing secret.",
@@ -18,14 +21,14 @@ export function paymentConfigFromEnv(
     return;
   }
   return {
-    stripe: new Stripe(key, { maxNetworkRetries: 2, timeout: 15_000 }),
+    stripe: new Stripe(key!, { maxNetworkRetries: 2, timeout: 15_000 }),
     webhookSecret,
   };
 }
 
 const participant = "(p.client_id=$1 OR p.freelancer_id=$1)";
 const paymentFields =
-  'p.id, p.job_id AS "jobId", p.job_title AS "jobTitle", p.freelancer_id AS "freelancerId", p.amount_cents AS "amountCents", p.status, p.created_at AS "createdAt", CASE WHEN p.client_id=$1 THEN f.name ELSE c.name END AS "peerName"';
+  'p.id, p.job_id AS "jobId", p.job_title AS "jobTitle", p.freelancer_id AS "freelancerId", p.amount_cents AS "amountCents", p.status, p.completed_at AS "completedAt", EXISTS(SELECT 1 FROM reviews r WHERE r.payment_id=p.id AND r.reviewer_id=$1) AS "reviewed", p.created_at AS "createdAt", CASE WHEN p.client_id=$1 THEN f.name ELSE c.name END AS "peerName"';
 const paymentJoins =
   "JOIN users f ON f.id=p.freelancer_id JOIN users c ON c.id=p.client_id";
 const checkoutBody = z
@@ -101,14 +104,17 @@ export function paymentRoutes(
   router.get("/stripe/connect", freelancerOnly, async (_req, res) => {
     const id = await accountId(res.locals.user.id);
     const account =
-      stripe && id ? await stripe.accounts.retrieve(id) : undefined;
+      stripe && id
+        ? await stripe.v2.core.accounts.retrieve(id, {
+            include: ["configuration.recipient"],
+          })
+        : undefined;
     res.json({
       enabled: !!stripe,
       connected: !!id,
       ready:
-        !!account?.details_submitted &&
-        account.capabilities?.transfers === "active" &&
-        account.payouts_enabled,
+        account?.configuration?.recipient?.capabilities?.stripe_balance
+          ?.stripe_transfers?.status === "active",
     });
   });
   router.post("/stripe/connect", freelancerOnly, async (_req, res) => {
@@ -121,11 +127,29 @@ export function paymentRoutes(
     const user = res.locals.user;
     let id = await accountId(user.id);
     if (!id) {
-      const account = await stripe.accounts.create(
+      const platform = await stripe.accounts.retrieve(null);
+      if (!platform.country)
+        throw new Error("Stripe platform country is missing");
+      const account = await stripe.v2.core.accounts.create(
         {
-          type: "express",
-          email: user.email,
-          capabilities: { transfers: { requested: true } },
+          dashboard: "express",
+          contact_email: user.email,
+          display_name: user.name,
+          identity: { country: platform.country },
+          defaults: {
+            currency: "usd",
+            responsibilities: {
+              fees_collector: "application",
+              losses_collector: "application",
+            },
+          },
+          configuration: {
+            recipient: {
+              capabilities: {
+                stripe_balance: { stripe_transfers: { requested: true } },
+              },
+            },
+          },
         },
         { idempotencyKey: `connect-${user.id}` },
       );
@@ -136,11 +160,15 @@ export function paymentRoutes(
       id = await accountId(user.id);
     }
     if (!id) throw new Error("Stripe account mapping could not be saved");
-    const link = await stripe.accountLinks.create({
+    const link = await stripe.v2.core.accountLinks.create({
       account: id,
-      type: "account_onboarding",
-      return_url: `${origin}/?payments=stripe-return`,
-      refresh_url: `${origin}/?payments=stripe-refresh`,
+      use_case: {
+        type: "account_onboarding",
+        account_onboarding: {
+          return_url: `${origin}/?payments=stripe-return`,
+          refresh_url: `${origin}/?payments=stripe-refresh`,
+        },
+      },
     });
     res.json({ url: link.url });
   });
@@ -179,11 +207,16 @@ export function paymentRoutes(
         .json({ error: "This freelancer needs to finish Stripe onboarding" });
       return;
     }
-    const account = await stripe.accounts.retrieve(eligible.account_id);
+    const account = await stripe.v2.core.accounts.retrieve(
+      eligible.account_id,
+      { include: ["configuration.recipient", "identity"] },
+    );
+    const platform = await stripe.accounts.retrieve(null);
     if (
-      !account.details_submitted ||
-      account.capabilities?.transfers !== "active" ||
-      !account.payouts_enabled
+      account.configuration?.recipient?.capabilities?.stripe_balance
+        ?.stripe_transfers?.status !== "active" ||
+      !platform.country ||
+      account.identity?.country !== platform.country
     ) {
       res
         .status(409)
@@ -245,7 +278,7 @@ export function paymentRoutes(
       : await stripe.checkout.sessions.create(
           {
             mode: "payment",
-            allowed_payment_method_types: ["card"],
+            integration_identifier: "freelancer_network_qmjruxpa",
             expires_at: attempt.expires_at,
             line_items: [
               {
@@ -281,6 +314,17 @@ export function paymentRoutes(
     }
     res.json({ id: attempt.id, url: session.url });
   });
+  const stripeErrors: ErrorRequestHandler = (error, _req, res, next) => {
+    if (error?.code === "non_connect_platform_accounts_v2_access_blocked") {
+      res.status(503).json({
+        error:
+          "Enable Stripe Connect in the sandbox account used by server/.env, then try again.",
+      });
+      return;
+    }
+    next(error);
+  };
+  router.use(stripeErrors);
   return router;
 }
 

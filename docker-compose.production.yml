@@ -1,0 +1,5 @@
+services:
+  app:
+    environment:
+      NODE_ENV: production
+      APP_ORIGIN: ${APP_ORIGIN:?Set APP_ORIGIN to your HTTPS public URL}

@@ -122,6 +122,20 @@ export async function openDatabase(path?: string) {
       stripe_payment_id TEXT UNIQUE,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
+    ALTER TABLE payments ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ;
+    CREATE TABLE IF NOT EXISTS reviews (
+      id UUID PRIMARY KEY,
+      payment_id UUID NOT NULL REFERENCES payments(id),
+      job_id UUID NOT NULL,
+      reviewer_id UUID NOT NULL REFERENCES users(id),
+      reviewed_user_id UUID NOT NULL REFERENCES users(id),
+      rating INTEGER NOT NULL CHECK(rating BETWEEN 1 AND 5),
+      comment TEXT NOT NULL CHECK(char_length(comment) BETWEEN 1 AND 2000),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE(payment_id,reviewer_id),
+      CHECK(reviewer_id <> reviewed_user_id)
+    );
+    CREATE INDEX IF NOT EXISTS reviews_user_idx ON reviews(reviewed_user_id,created_at DESC);
     CREATE UNIQUE INDEX IF NOT EXISTS payments_active_job_idx ON payments(job_id) WHERE status IN ('pending','paid');
     CREATE INDEX IF NOT EXISTS payments_client_idx ON payments(client_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS payments_freelancer_idx ON payments(freelancer_id, created_at DESC);

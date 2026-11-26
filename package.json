@@ -14,7 +14,8 @@
     "start": "concurrently -k \"npm --prefix server start\" \"npm --prefix client start\"",
     "postinstall": "npm --prefix server ci && npm --prefix client ci",
     "format": "prettier --write client/app client/next.config.ts server/src server/test tests playwright.config.ts package.json",
-    "audit": "npm audit --audit-level=high && npm --prefix server audit --audit-level=high && npm --prefix client audit --audit-level=high"
+    "audit": "npm audit --audit-level=high && npm --prefix server audit --audit-level=high && npm --prefix client audit --audit-level=high",
+    "stripe:listen": "node scripts/stripe-listen.mjs"
   },
   "devDependencies": {
     "@playwright/test": "latest",

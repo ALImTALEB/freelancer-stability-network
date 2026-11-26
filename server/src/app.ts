@@ -11,6 +11,7 @@ import { z } from "zod";
 import type { Database } from "./db.js";
 import { digest, hashPassword, verifyPassword } from "./security.js";
 import { calculateMatchScore } from "./matching.js";
+import { reviewRoutes } from "./reviews.js";
 import { messagingRoutes } from "./messaging.js";
 import {
   paymentRoutes,
@@ -192,6 +193,7 @@ export function createApp(
     await db.query("SELECT 1");
     res.json({ status: "ok" });
   });
+  app.use("/api", reviewRoutes(db, auth));
   const authLimit = rateLimit({
     windowMs: 15 * 60000,
     limit: options.rateLimit ?? 30,

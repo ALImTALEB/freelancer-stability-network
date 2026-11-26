@@ -1,5 +1,6 @@
 "use client";
 
+import { WorkReview } from "./reviews";
 import { useEffect, useState, type FormEvent } from "react";
 
 type Api = <T>(path: string, method?: string, body?: unknown) => Promise<T>;
@@ -11,6 +12,8 @@ type Payment = {
   peerName: string;
   amountCents: number;
   status: string;
+  completedAt?: string | null;
+  reviewed?: boolean;
 };
 type PaymentList = { enabled: boolean; payments: Payment[] };
 type Connect = { enabled: boolean; connected: boolean; ready: boolean };
@@ -123,6 +126,12 @@ export function Payments({
               {payment.peerName} · {usd.format(payment.amountCents / 100)} ·{" "}
               {payment.status}
             </span>
+            <WorkReview
+              api={api}
+              payment={payment}
+              freelancer={freelancer}
+              onChange={() => setRevision((v) => v + 1)}
+            />
           </li>
         ))}
       </ul>

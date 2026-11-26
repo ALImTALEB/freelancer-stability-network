@@ -15,20 +15,44 @@ test("Connect onboarding, checkout authorization, signed webhooks, and payment v
     let accounts = 0;
     const sessions = new Map<string, Stripe.Checkout.SessionCreateParams>();
     Object.assign(stripe.accounts, {
-      create: async () => {
+      retrieve: async () => ({ country: "US" }),
+    });
+    Object.assign(stripe.v2.core.accounts, {
+      create: async (params: Stripe.V2.Core.AccountCreateParams) => {
+        assert.equal(params.dashboard, "express");
+        assert.equal(params.identity?.country, "US");
+        assert.equal(
+          params.configuration?.recipient?.capabilities?.stripe_balance
+            ?.stripe_transfers?.requested,
+          true,
+        );
+        assert.equal(
+          params.defaults?.responsibilities?.losses_collector,
+          "application",
+        );
         accounts++;
         return { id: "acct_fixture" };
       },
       retrieve: async () => ({
-        details_submitted: ready,
-        capabilities: { transfers: ready ? "active" : "pending" },
-        payouts_enabled: ready,
+        identity: { country: "US" },
+        configuration: {
+          recipient: {
+            capabilities: {
+              stripe_balance: {
+                stripe_transfers: { status: ready ? "active" : "pending" },
+              },
+            },
+          },
+        },
       }),
     });
-    Object.assign(stripe.accountLinks, {
-      create: async (params: Stripe.AccountLinkCreateParams) => {
+    Object.assign(stripe.v2.core.accountLinks, {
+      create: async (params: Stripe.V2.Core.AccountLinkCreateParams) => {
         assert.equal(params.account, "acct_fixture");
-        assert.equal(params.return_url, origin + "/?payments=stripe-return");
+        assert.equal(
+          params.use_case.account_onboarding?.return_url,
+          origin + "/?payments=stripe-return",
+        );
         return { url: "https://connect.stripe.com/setup/test" };
       },
     });
@@ -44,6 +68,8 @@ test("Connect onboarding, checkout authorization, signed webhooks, and payment v
         params: Stripe.Checkout.SessionCreateParams,
         options: Stripe.RequestOptions,
       ) => {
+        assert.equal(params.allowed_payment_method_types, undefined);
+        assert.match(params.integration_identifier!, /_[a-z]{8}$/);
         assert.equal(params.line_items?.[0].price_data?.unit_amount, 12345);
         assert.equal(
           params.payment_intent_data?.transfer_data?.destination,

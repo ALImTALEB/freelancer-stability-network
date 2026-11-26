@@ -1,0 +1,32 @@
+name: Security and container deployment checks
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  container:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: docker build -t fsn:local .
+      - name: Scan container
+        run: |
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:latest image --exit-code 1 --severity HIGH,CRITICAL --ignore-unfixed fsn:local
+      - name: Deploy isolated test environment
+        run: |
+          docker compose up -d --wait --wait-timeout 180
+          curl --fail --retry 10 --retry-delay 3 --retry-all-errors http://localhost:3100/api/health
+      - name: Passive DAST baseline
+        run: |
+          mkdir -p reports
+          chmod 777 reports
+          docker run --rm --network host -v "$PWD/reports:/zap/wrk:rw" ghcr.io/zaproxy/zaproxy:stable zap-baseline.py -t http://127.0.0.1:3100 -m 1 -r zap.html
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: dast-report
+          path: reports/
+      - run: docker compose down
+        if: always()

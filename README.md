@@ -1,6 +1,6 @@
 # Freelancer Stability Network
 
-Week 1 marketplace foundation, Week 2 skill matching, Week 3 private messaging, and Week 4 Stripe Connect test payments. Next.js + TypeScript client, Express + TypeScript REST API, and persistent embedded PostgreSQL (PGlite).
+Week 1 marketplace foundation, Week 2 skill matching, Week 3 private messaging, Week 4 Stripe Connect test payments, and Week 5 ratings/reviews with container and security workflows. Next.js + TypeScript client, Express + TypeScript REST API, and persistent embedded PostgreSQL (PGlite).
 
 ## Quick start
 
@@ -32,7 +32,7 @@ AGENTS.md         Repository working instructions
 .github/workflows/ci.yml
 ```
 
-Docker Compose is intentionally deferred until the container milestone.
+Week 5 adds Docker Compose; see [Week 5 setup and acceptance checks](docs/WEEK_5.md).
 
 ## Commands
 
@@ -89,8 +89,14 @@ To try private messaging, open a posting as a freelancer and choose **Message cl
    stripe listen --events checkout.session.completed,checkout.session.async_payment_succeeded,checkout.session.async_payment_failed,checkout.session.expired --forward-to http://127.0.0.1:4100/api/stripe/webhook
    ```
 
-3. In `server/.env`, set `STRIPE_SECRET_KEY` to your environment's `sk_test_` key and `STRIPE_WEBHOOK_SECRET` to the `whsec_` secret printed by the listener. Restart `npm.cmd run dev`. The app accepts only a test secret key. When the credentials are absent, accounts, jobs, matching and messaging remain usable.
+3. In `server/.env`, set `STRIPE_SECRET_KEY` to your environment's `sk_test_` key and `STRIPE_WEBHOOK_SECRET` to the `whsec_` secret printed by the listener. Restart `npm.cmd run dev`. The app accepts test secret or restricted keys; prefer a restricted test key with the necessary permissions. When the credentials are absent, accounts, jobs, matching and messaging remain usable.
 4. As a freelancer, open **Payments → Connect with Stripe** and complete test onboarding. Return to **Payments** and verify the account is ready. As the client, start or reuse a conversation with that freelancer, open a job you own from **My job postings**, choose the freelancer, and start **Test payment**.
 5. In hosted Checkout, use Stripe's `4242 4242 4242 4242` test card with a future expiry and any three-digit CVC. After returning, open **Payments** and refresh its status. Both participants should see **paid** once the webhook arrives. Try a declined test card to verify Stripe lets the client retry the same session. [Stripe test cards](https://docs.stripe.com/testing)
 
 Checkout charges the saved USD job budget and routes the funds to the freelancer's connected account using a Stripe destination charge. Each job has at most one pending or paid attempt. A pending Checkout session can be reopened from the job, and a verified expiration or failure allows another attempt. If a session never gets recorded and Stripe's response was ambiguous, the reservation is retained after its retry window to avoid a duplicate charge. Inspect the corresponding Checkout event or session in Stripe before deciding how to resolve it. Payment history remains available after a job is deleted. [Stripe destination charges](https://docs.stripe.com/connect/destination-charges)
+
+See [the reviewed Stripe plan](docs/STRIPE_PLAN.md) for Accounts v2 setup, sandbox limitations, and the local-key listener command: npm.cmd run stripe:listen.
+
+## Ratings and reviews
+
+After payment, the client marks work complete in Payments. Both participants can then submit one rating and review each. See [Week 5](docs/WEEK_5.md) for eligibility, testing, and deployment details.
